@@ -3,6 +3,7 @@ package main
 import (
 	"./ksysguard"
 	"bytes"
+	"flag"
 	"fmt"
 	"io/ioutil"
 	"log"
@@ -20,6 +21,7 @@ type (
 		returnUnit         string
 		min, max, current  string
 		firstRead          bool
+		justOneValue       bool
 	}
 )
 
@@ -38,7 +40,7 @@ var (
 			name:       "mclk",
 			desc:       "Memory Clock Speed",
 			match:      `\d+: (\d+)Mhz`,
-			returnType: "int",
+			returnType: ksysguard.ProtocolInteger,
 			returnUnit: "Mhz",
 		},
 		{
@@ -46,7 +48,7 @@ var (
 			name:       "socclk",
 			desc:       "GPU SoC Clock Speed",
 			match:      `\d+: (\d+)Mhz`,
-			returnType: "int",
+			returnType: ksysguard.ProtocolInteger,
 			returnUnit: "Mhz",
 		},
 		{
@@ -54,15 +56,15 @@ var (
 			name:       "fclk",
 			desc:       "",
 			match:      `\d+: (\d+)Mhz`,
-			returnType: "int",
+			returnType: ksysguard.ProtocolInteger,
 			returnUnit: "Mhz",
 		},
 		{
 			filename:   "pp_dpm_dcefclk",
 			name:       "dcefclk",
-			desc:       "Display (DCE) Fabric Clock",
+			desc:       "Display (DCE) Clock",
 			match:      `\d+: (\d+)Mhz`,
-			returnType: "int",
+			returnType: ksysguard.ProtocolInteger,
 			returnUnit: "Mhz",
 		},
 		{
@@ -70,8 +72,18 @@ var (
 			name:       "pcie",
 			desc:       "PCIe Bandwidth Speed",
 			match:      `\d+: ([\.\d]+)GT/s`,
-			returnType: "float",
+			returnType: ksysguard.ProtocolFloat,
 			returnUnit: "GT/s",
+		},
+		{
+			filename:   "gpu_busy_percent",
+			name:       "gpu_busy_percent",
+			desc:       "GPU Busy Percent",
+			justOneValue: true,
+			min: "0",
+			max: "100",
+			returnType: ksysguard.ProtocolInteger,
+			returnUnit: "%",
 		},
 	}
 )
@@ -87,8 +99,27 @@ func main() {
 		}
 	}
 
+	daemon := flag.Bool("daemon", false, "Run as a daemon")
+	port := flag.Int("port", 2635, "Port to listen on in Daemon mode")
+	dump := flag.Bool("dump", false, "just dump the current values and exit")
+	help := flag.Bool("help", false, "show this help")
+	flag.Parse()
+
 	// now. run!
-	ksg.Dump()
+	if *dump {
+		ksg.Dump()
+		return
+	}
+	if *help {
+		println("KSysGuard sensor reading for extra AMDGPU clock domains")
+		flag.Usage()
+		return
+	}
+	if *daemon {
+		ksg.Daemon(*port)
+		return
+	}
+	ksg.Run()
 }
 
 func (pf *PerfFile) SetBasePath(basePath string) {
@@ -116,6 +147,10 @@ func (pf *PerfFile) ReadValues() error {
 	if nil != err {
 		log.Printf("Failed to get contents of %s: %s\n", pf.fullPath(), err)
 		return err
+	}
+	if pf.justOneValue {
+		pf.current = string(bytes.TrimSpace(contents))
+		return nil
 	}
 	lines := bytes.Split(bytes.TrimSpace(contents), []byte("\n"))
 	getVal := func(l []byte) []byte {
@@ -173,7 +208,7 @@ func (pf PerfFile) Desc() string {
 }
 
 func (pf PerfFile) Type() string {
-	return pf.returnUnit
+	return pf.returnType
 }
 
 func (pf PerfFile) Units() string {
